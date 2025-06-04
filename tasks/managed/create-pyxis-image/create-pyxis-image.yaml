@@ -149,10 +149,6 @@ spec:
         then
           PYXIS_URL="https://pyxis.api.redhat.com/"
           PYXIS_GRAPHQL_URL="https://graphql-pyxis.api.redhat.com/graphql/"
-        elif [[ "$(params.server)" == "stage" ]]
-        then
-          PYXIS_URL="https://pyxis.preprod.api.redhat.com/"
-          PYXIS_GRAPHQL_URL="https://graphql-pyxis.preprod.api.redhat.com/graphql/"
         elif [[ "$(params.server)" == "production-internal" ]]
         then
           PYXIS_URL="https://pyxis.engineering.redhat.com/"
