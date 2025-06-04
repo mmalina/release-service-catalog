@@ -190,6 +190,7 @@ spec:
 
         # Default to false
         includeLayers="$(jq -r ".pyxis.includeLayers // false" "${DATA_FILE}")"
+        echo "Include layers in Pyxis: ${includeLayers}"
 
         COMPONENTS=$(jq '.components | length' "${SNAPSHOT_SPEC_FILE}")
         JSON_OUTPUT='{}'
