@@ -25,6 +25,21 @@ set -e
 ORG="konflux-ci"
 REPO="release-service-catalog"
 
+print_help(){
+    echo "Usage: $0 --branches branch1-to-branch2 [--force-to-staging false] [--override false] [--dry-run false]"
+    echo
+    echo "  --promotion-type:   The type of promotion to perform. Either development-to-staging"
+    echo "                      or staging-to-production."
+    echo "  --force-to-staging: If passed with value true, allow promotion to staging even"
+    echo "                      if staging and production differ."
+    echo "  --override:         If passed with value true, allow promotion to production"
+    echo "                      even if the change has not been in staging for one week."
+    echo "  --dry-run:          If passed with value true, print out the changes that would"
+    echo "                      be promoted but do not git push or delete the temp repo."
+    echo
+    echo "  --promotion-type has to be specified."
+}
+
 OPTIONS=$(getopt --long "promotion-type:,force-to-staging:,override:,dry-run:,help" -o "p:,h" -- "$@")
 eval set -- "$OPTIONS"
 while true; do
@@ -56,21 +71,6 @@ while true; do
         *) echo "Error: Unexpected option: $1" % >2
     esac
 done
-
-print_help(){
-    echo "Usage: $0 --branches branch1-to-branch2 [--force-to-staging false] [--override false] [--dry-run false]"
-    echo
-    echo "  --promotion-type:   The type of promotion to perform. Either development-to-staging"
-    echo "                      or staging-to-production."
-    echo "  --force-to-staging: If passed with value true, allow promotion to staging even"
-    echo "                      if staging and production differ."
-    echo "  --override:         If passed with value true, allow promotion to production"
-    echo "                      even if the change has not been in staging for one week."
-    echo "  --dry-run:          If passed with value true, print out the changes that would"
-    echo "                      be promoted but do not git push or delete the temp repo."
-    echo
-    echo "  --promotion-type has to be specified."
-}
 
 check_if_branch_differs() {
     ACTUAL_DIFFERENT_LINES=$(git diff --numstat origin/$1 | wc -l)
@@ -111,9 +111,24 @@ if [ -z "${GITHUB_TOKEN}" ]; then
     print_help
     exit 1
 fi
+if [ -z "${GEMINI_API_KEY}" ]; then
+    echo -e "Error: missing 'GEMINI_API_KEY' environment variable\n"
+    print_help
+    exit 1
+fi
+
 
 # Personal access token with appropriate permissions
 token="${GITHUB_TOKEN}"
+
+ORIGINAL_DIRECTORY=$(pwd)
+
+# Use gdate on Mac
+if [[ "$(uname)" == "Darwin" ]]; then
+    date() {
+        gdate "$@"
+    }
+fi
 
 # Clone the repository
 tmpDir=$(mktemp -d)
@@ -137,16 +152,48 @@ if [[ "${TARGET_BRANCH}" == "staging" && "${FORCE_TO_STAGING}" != "true" ]] ; th
     check_if_branch_differs production
 fi
 
-echo "Included PRs:"
+MESSAGES_FILE=$(mktemp)
+COMMIT_LINKS_FILE=$(mktemp)
+RESULT_FILE="${RESULT_FILE:-$ORIGINAL_DIRECTORY/summary_of_changes.html}"
+GITHUB_REPO_URL="https://github.com/konflux-ci/release-service-catalog"
+
+echo "Included commits:"
 COMMITS=($(git rev-list --first-parent --ancestry-path origin/"$TARGET_BRANCH"'...'origin/"$SOURCE_BRANCH"))
 ## now loop through the above array
 for COMMIT in "${COMMITS[@]}"
 do
-  echo $(curl -s   -H 'Authorization: token  '"$token"  'https://api.github.com/search/issues?q=sha:'"$COMMIT" | jq -r '.items[]
-    | select(.repository_url=="https://api.github.com/repos/'"$ORG"'/'"$REPO"'")
-    | .pull_request | select(.merged_at!=null) | .html_url')
-  git show --oneline --no-patch $COMMIT
+  LINE=$(git show --oneline --no-patch "$COMMIT")
+  echo "$LINE"
+  SHA=$(echo "$LINE" | awk '{print $1}')
+  MESSAGE=$(echo "$LINE" | cut -d' ' -f2-)
+  echo "<a href=\"$GITHUB_REPO_URL/commit/$SHA\">$SHA</a> $MESSAGE<br>" >> $COMMIT_LINKS_FILE
+  git show --no-patch --pretty=format:%B $COMMIT >> $MESSAGES_FILE
+  echo >> $MESSAGES_FILE
+  echo --- >> $MESSAGES_FILE
 done
+
+echo Summary of changes:
+
+curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -X POST \
+  -d '{
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Provide a summary of changes made in the following commits (commit messages separated by `---`):\n\n'"$(cat $MESSAGES_FILE)"'\n\nThe summary should be concise and suitable for a newsletter sent out to users. It should be formatted in html (but no enclosing in ```html ``` please) and should not include any links or references to the commits themselves. The summary should be written in a friendly and engaging tone, suitable for a general audience.",
+          }
+        ]
+      }
+    ]
+  }' | jq -r '.candidates[0].content.parts[0].text' > $RESULT_FILE
+
+echo "<p>Changes promoted from <b>${SOURCE_BRANCH}</b> to <b>${TARGET_BRANCH}</b></p>" >> $RESULT_FILE
+cat $COMMIT_LINKS_FILE >> $RESULT_FILE
+
+echo Results written to $RESULT_FILE
+cat $RESULT_FILE
 
 if [ "${DRY_RUN}" == "true" ] ; then
     exit

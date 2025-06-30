@@ -47,3 +47,10 @@ jobs:
           OVERRIDE: ${{ inputs.override }}
           DRY: ${{ inputs.dry-run }}
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RESULT_FILE: ${{ github.workspace }}/summary_of_changes.html
+      - name: Upload summary of changes
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary_of_changes.html
+          path: ${{ github.workspace }}/summary_of_changes.html
